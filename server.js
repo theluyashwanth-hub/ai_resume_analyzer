@@ -18,8 +18,11 @@ const interviewRoutes = require('./routes/interview');
 const app = express();
 
 // --- Serverless Database Connection Helper ---
-const DEFAULT_MONGO_URI = 'mongodb+srv://theluyashwanth_db_user:zYgpa7mlV6nLAqkK@cluster0.5b7f8gb.mongodb.net/resumeai?retryWrites=true&w=majority';
-const MONGODB_URI = process.env.MONGODB_URI || DEFAULT_MONGO_URI;
+const MONGODB_URI = process.env.MONGODB_URI;
+if (!MONGODB_URI) {
+  console.error('❌ MONGODB_URI environment variable is not set. Server cannot start.');
+  process.exit(1);
+}
 
 mongoose.set('strictQuery', false);
 mongoose.set('bufferCommands', false);
