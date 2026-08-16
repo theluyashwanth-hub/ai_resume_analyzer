@@ -14,7 +14,7 @@ router.post('/generate', auth({ required: false }), async (req, res) => {
       return res.status(400).json({ error: 'Job description is required to generate interview questions.' });
     }
 
-    const questions = await aiService.generateQuestions(jobDescription, level);
+    const questions = await aiService.generateQuestions(jobDescription, level, roleTitle);
 
     let savedSession = null;
     try {

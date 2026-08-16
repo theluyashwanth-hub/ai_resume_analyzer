@@ -1,36 +1,37 @@
 // Safely retrieve API Keys from process.env
 const getNvidiaApiKey = () => process.env.NVIDIA_API_KEY || process.env.NVIDIA_KEY;
 
-// Helper: Extract valid JSON block from raw LLM output text
 const parseJSONFromText = (text) => {
   if (!text) return null;
   
-  // Try direct parse first
-  try {
-    return JSON.parse(text);
-  } catch (e) {
-    // Attempt markdown json code block extraction
-    const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-    if (jsonMatch && jsonMatch[1]) {
-      try {
-        return JSON.parse(jsonMatch[1].trim());
-      } catch (err) {
-        console.warn('Failed to parse json inside markdown block', err.message);
-      }
-    }
-
-    // Attempt greedy brace matching
-    const firstBrace = text.indexOf('{');
-    const lastBrace = text.lastIndexOf('}');
+  let cleanText = text.trim();
+  
+  // Extract markdown json block if present
+  const jsonMatch = cleanText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (jsonMatch && jsonMatch[1]) {
+    cleanText = jsonMatch[1].trim();
+  } else {
+    const firstBrace = cleanText.indexOf('{');
+    const lastBrace = cleanText.lastIndexOf('}');
     if (firstBrace !== -1 && lastBrace > firstBrace) {
-      try {
-        return JSON.parse(text.substring(firstBrace, lastBrace + 1));
-      } catch (err) {
-        console.warn('Failed brace extraction', err.message);
-      }
+      cleanText = cleanText.substring(firstBrace, lastBrace + 1);
     }
   }
-  return null;
+
+  try {
+    return JSON.parse(cleanText);
+  } catch (e1) {
+    try {
+      // Fix common LLM JSON syntax anomalies (trailing commas, raw control chars, unescaped linebreaks)
+      const sanitized = cleanText
+        .replace(/,\s*([\}\]])/g, '$1')
+        .replace(/[\u0000-\u001F\u007F-\u009F]/g, (c) => c === '\n' || c === '\r' || c === '\t' ? c : '');
+      return JSON.parse(sanitized);
+    } catch (e2) {
+      console.warn('[parseJSONFromText] Failed to parse JSON:', e2.message);
+      return null;
+    }
+  }
 };
 
 // --- NVIDIA AI Endpoints Integration (OpenAI-compatible REST API) ---
@@ -57,7 +58,8 @@ async function callNvidiaAI(prompt, systemPrompt = "You are an expert career int
       temperature: 0.2,
       top_p: 0.7,
       max_tokens: 1024
-    })
+    }),
+    signal: AbortSignal.timeout(6000)
   });
 
   if (!response.ok) {
@@ -119,47 +121,257 @@ const fallbackAnalyzeResume = (resumeText, jobDescription) => {
 };
 
 // --- Fallback Question Generator ---
-const fallbackGenerateQuestions = (jobDescription, level = 'mid') => {
+const fallbackGenerateQuestions = (jobDescription, level = 'mid', roleTitle = 'Software Engineer') => {
   const cleanJD = (jobDescription || '').toLowerCase();
-  const isBackend = cleanJD.includes('node') || cleanJD.includes('express') || cleanJD.includes('backend') || cleanJD.includes('api');
+  const cleanRole = (roleTitle || '').toLowerCase();
+  const combined = `${cleanRole} ${cleanJD}`;
 
+  // Domain flags
+  const isDataScience = combined.includes('data sci') || combined.includes('machine learning') || combined.includes('ai ') || combined.includes('pytorch') || combined.includes('tensorflow') || (combined.includes('python') && combined.includes('model'));
+  const isDevOps = combined.includes('devops') || combined.includes('cloud') || combined.includes('aws') || combined.includes('kubernetes') || combined.includes('docker') || combined.includes('ci/cd') || combined.includes('terraform') || combined.includes('sre');
+  const isDataEng = combined.includes('data eng') || combined.includes('etl') || combined.includes('snowflake') || combined.includes('spark') || combined.includes('sql') || combined.includes('big data');
+  const isFrontend = combined.includes('frontend') || combined.includes('react') || combined.includes('vue') || combined.includes('angular') || combined.includes('css') || combined.includes('ui/ux') || combined.includes('web developer');
+  const isMobile = combined.includes('mobile') || combined.includes('flutter') || combined.includes('react native') || combined.includes('android') || combined.includes('ios') || combined.includes('swift');
+  const isSecurity = combined.includes('security') || combined.includes('cyber') || combined.includes('soc') || combined.includes('threat') || combined.includes('penetration');
+
+  const displayRole = roleTitle && roleTitle !== 'Target Role' ? roleTitle : 'Software Engineer';
+
+  if (isDataScience) {
+    return [
+      {
+        id: 'q1',
+        type: 'technical',
+        question: `For a ${level}-level ${displayRole} role, how do you handle feature engineering, missing data imputation, and class imbalance in machine learning models?`,
+        context: `Evaluates feature selection, data quality pipelines, and baseline model design.`,
+        sampleAnswer: `I perform exploratory data analysis, apply domain-specific imputation for missing values, and use SMOTE or class-weight rebalancing to handle imbalance.`
+      },
+      {
+        id: 'q2',
+        type: 'technical',
+        question: `Describe how you evaluate model performance beyond simple accuracy, and how you prevent data leakage during cross-validation.`,
+        context: `Assesses cross-validation rigor, ROC-AUC/F1 metrics, and generalization confidence.`,
+        sampleAnswer: `I use stratified k-fold cross-validation, evaluate precision-recall AUC metrics, and isolate feature transformations strictly within training folds.`
+      },
+      {
+        id: 'q3',
+        type: 'behavioral',
+        question: `Tell me about a project where your statistical modeling or predictive analysis directly drove a key business decision.`,
+        context: `Tests business impact, data advocacy, and translating quantitative metrics into organizational value.`,
+        sampleAnswer: `I built a churn prediction model that identified high-risk accounts 30 days prior, allowing customer success to retain significant revenue.`
+      },
+      {
+        id: 'q4',
+        type: 'technical',
+        question: `What tools and frameworks (e.g. PyTorch, TensorFlow, MLflow, Docker) do you use to deploy and monitor ML models in production?`,
+        context: `Evaluates MLOps maturity, model serving latency, and drift detection.`,
+        sampleAnswer: `I package models into containerized REST microservices using FastAPI/Docker, track experiments in MLflow, and monitor data drift.`
+      },
+      {
+        id: 'q5',
+        type: 'behavioral',
+        question: `Give an example of how you communicated complex model trade-offs or technical limitations to non-technical stakeholders.`,
+        context: `Assesses executive communication, clarity, and managing expectations around model accuracy limits.`,
+        sampleAnswer: `I created visual confusion matrix charts to demonstrate false positive trade-offs, guiding leadership to choose an optimal decision threshold.`
+      }
+    ];
+  }
+
+  if (isDevOps) {
+    return [
+      {
+        id: 'q1',
+        type: 'technical',
+        question: `For a ${level}-level ${displayRole} role, how do you design zero-downtime deployment pipelines using Infrastructure as Code (Terraform/CloudFormation)?`,
+        context: `Evaluates cloud automation, immutable infrastructure, and deployment pipeline confidence.`,
+        sampleAnswer: `I use modular Terraform scripts versioned in Git, paired with automated blue/green or canary deployment strategies.`
+      },
+      {
+        id: 'q2',
+        type: 'technical',
+        question: `Describe your approach to container orchestration, service discovery, and secret management in Kubernetes/Docker environments.`,
+        context: `Assesses container security, ingress routing, and config management.`,
+        sampleAnswer: `I enforce Helm charts for release deployment, manage secrets via HashiCorp Vault, and configure strict NetworkPolicies.`
+      },
+      {
+        id: 'q3',
+        type: 'behavioral',
+        question: `Tell me about a major production outage or high-severity incident you responded to under operational pressure.`,
+        context: `Tests incident management, root-cause postmortems, and triage under pressure.`,
+        sampleAnswer: `I analyzed log aggregators to isolate a cascading connection pool exhaustion, rolled back the release, and authored a blameless postmortem.`
+      },
+      {
+        id: 'q4',
+        type: 'technical',
+        question: `What telemetry, logging, and alerting stack (e.g., Prometheus, Grafana, ELK) do you mandate for high-availability systems?`,
+        context: `Evaluates system observability, distributed tracing, and SLA/SLO monitoring.`,
+        sampleAnswer: `I configure Prometheus metrics scrapers, Grafana dashboards for latency SLIs, and PagerDuty alerts for actionable error rate spikes.`
+      },
+      {
+        id: 'q5',
+        type: 'behavioral',
+        question: `Give an example of how you balanced developer feature velocity with strict security compliance and cloud cost optimization.`,
+        context: `Assesses DevSecOps advocacy, FinOps awareness, and cross-functional alignment.`,
+        sampleAnswer: `I automated security scanning in CI to catch vulnerabilities early, while implementing cloud auto-scaling policies that cut compute spend.`
+      }
+    ];
+  }
+
+  if (isDataEng) {
+    return [
+      {
+        id: 'q1',
+        type: 'technical',
+        question: `As a ${level}-level ${displayRole}, how do you design scalable ETL/ELT pipelines and handle schema evolution in data warehouses (Snowflake/BigQuery)?`,
+        context: `Assesses data pipeline architecture, schema design, and data warehouse partitioning.`,
+        sampleAnswer: `I build modular dbt/Airflow pipelines utilizing incremental models and partition key optimizations to handle changing schemas.`
+      },
+      {
+        id: 'q2',
+        type: 'technical',
+        question: `Describe a production database query performance bottleneck you diagnosed, and the exact indexing/partitioning steps you used to resolve it.`,
+        context: `Evaluates query optimization, window functions, and distributed engine execution plans.`,
+        sampleAnswer: `I inspected query execution plans, refactored heavy join operations, applied clustering keys, and reduced pipeline runtime.`
+      },
+      {
+        id: 'q3',
+        type: 'behavioral',
+        question: `Tell me about a time when corrupted or delayed data in your pipeline impacted downstream business dashboards. How did you handle it?`,
+        context: `Tests data quality monitoring, stakeholder communication, and incident remediation.`,
+        sampleAnswer: `I notified key data consumers immediately, implemented circuit-breaker data quality assertions using Great Expectations, and backfilled missing records.`
+      },
+      {
+        id: 'q4',
+        type: 'technical',
+        question: `How do you structure event-driven data streaming (e.g., Kafka, Spark Streaming) vs batch processing for near real-time analytics?`,
+        context: `Evaluates streaming architectures, exactly-once processing semantics, and queue management.`,
+        sampleAnswer: `I use Apache Kafka for decoupled event ingestion with Spark Streaming for windowed aggregations, using dead-letter queues for malformed payloads.`
+      },
+      {
+        id: 'q5',
+        type: 'behavioral',
+        question: `How do you collaborate with data science and software engineering teams to define clear data contracts and SLAs?`,
+        context: `Assesses cross-functional collaboration, documentation, and data governance.`,
+        sampleAnswer: `I established JSON Schema data contracts at API boundaries and documented data lineage diagrams so upstream changes didn't break downstream pipelines.`
+      }
+    ];
+  }
+
+  if (isFrontend || isMobile) {
+    return [
+      {
+        id: 'q1',
+        type: 'technical',
+        question: `As a ${level}-level ${displayRole}, how do you optimize initial bundle size, render performance, and state management in modern Web/Mobile applications?`,
+        context: `Assesses frontend architecture, code splitting, memoization, and state normalization.`,
+        sampleAnswer: `I implement lazy loading with route-based code splitting, optimize dynamic component re-renders using React.memo/useCallback, and keep global state minimal.`
+      },
+      {
+        id: 'q2',
+        type: 'technical',
+        question: `Describe how you ensure responsive layout design, web accessibility (a11y), and consistent cross-browser UI component rendering.`,
+        context: `Evaluates CSS layout mastery, semantic HTML, ARIA standards, and component reusability.`,
+        sampleAnswer: `I construct design system tokens using CSS variables, enforce semantic HTML tags with proper ARIA attributes, and test across device viewports.`
+      },
+      {
+        id: 'q3',
+        type: 'behavioral',
+        question: `Tell me about a time when UI/UX requirements changed late in a development sprint. How did you adapt without compromising code quality?`,
+        context: `Tests adaptability, component modularity, and managing deadline pressure.`,
+        sampleAnswer: `Because my UI components were atomic and decoupled from business logic, I updated the presentation layer quickly while keeping integration tests passing.`
+      },
+      {
+        id: 'q4',
+        type: 'technical',
+        question: `What automated testing strategy (Unit, Integration, E2E via Cypress/Playwright) do you set up for user interface reliability?`,
+        context: `Evaluates testing discipline, mock data strategies, and visual regression confidence.`,
+        sampleAnswer: `I write unit tests for custom hooks using React Testing Library and run headless Playwright end-to-end user journey tests in CI.`
+      },
+      {
+        id: 'q5',
+        type: 'behavioral',
+        question: `Give an example of a technical collaboration with product managers or backend engineers to define API response structures for optimal client performance.`,
+        context: `Assesses API contract design, client-side caching, and UX alignment.`,
+        sampleAnswer: `I proposed a paginated GraphQL payload schema that reduced payload size by 70%, preventing mobile UI freeze on slow networks.`
+      }
+    ];
+  }
+
+  if (isSecurity) {
+    return [
+      {
+        id: 'q1',
+        type: 'technical',
+        question: `As a ${level}-level ${displayRole}, how do you perform threat modeling, vulnerability assessments, and OWASP Top 10 mitigation?`,
+        context: `Assesses security posture, penetration testing methodologies, and secure coding standards.`,
+        sampleAnswer: `I execute threat modeling during design, enforce static code analysis (SAST) in CI pipelines, and audit authentication/authorization bounds.`
+      },
+      {
+        id: 'q2',
+        type: 'technical',
+        question: `Describe your incident response workflow when suspicious activity or a credential leak is detected in production.`,
+        context: `Evaluates containment strategy, forensic logging, and post-breach remediation.`,
+        sampleAnswer: `I isolate compromised endpoints, revoke leaked keys immediately, examine SIEM logs for lateral movement, and conduct a full root-cause audit.`
+      },
+      {
+        id: 'q3',
+        type: 'behavioral',
+        question: `Tell me about a time you had to convince engineering teams to prioritize security patches over deadline-driven feature requests.`,
+        context: `Tests security advocacy, risk quantification, and executive communication.`,
+        sampleAnswer: `I quantified the business financial and compliance risk of the vulnerability, presenting a clear remediation roadmap that minimized feature delay.`
+      },
+      {
+        id: 'q4',
+        type: 'technical',
+        question: `What identity management (IAM), encryption standards (AES-256, TLS 1.3), and zero-trust policies do you enforce?`,
+        context: `Assesses cryptography, zero-trust network policy, and access control models.`,
+        sampleAnswer: `I enforce least-privilege RBAC, mandate mTLS for internal service communication, and ensure data is encrypted at rest with managed KMS keys.`
+      },
+      {
+        id: 'q5',
+        type: 'behavioral',
+        question: `How do you stay updated with emerging security threats and foster a security-first culture across software teams?`,
+        context: `Assesses continuous learning, team security awareness, and developer enablement.`,
+        sampleAnswer: `I track CVE disclosures, conduct hands-on security workshops for developers, and integrate automated security feedback into their daily workflow.`
+      }
+    ];
+  }
+
+  // Default Software / Full-Stack / Backend Engineer Questions
   return [
     {
       id: 'q1',
       type: 'technical',
-      question: isBackend 
-        ? `How do you handle API authentication and state management securely in a distributed Node.js/Express architecture?` 
-        : `Explain how React's Virtual DOM works and how you optimize component re-renders in a high-throughput UI.`,
-      context: `Assesses core framework internals and architectural decision making.`,
-      sampleAnswer: `I implement stateless JWT authentication with HTTPS-only cookies, combined with memoization and strategic state encapsulation.`
+      question: `For a ${level}-level ${displayRole} role, how do you design secure, scalable REST/GraphQL APIs and manage distributed state effectively?`,
+      context: `Assesses core architecture, stateless authentication (JWT/OAuth2), and API design principles.`,
+      sampleAnswer: `I build stateless REST endpoints secured with JWT tokens, enforce rate-limiting middleware, and use structured DTOs for payload validation.`
     },
     {
       id: 'q2',
       type: 'technical',
-      question: `Describe a production database bottleneck you encountered and the exact steps you took to diagnose and resolve it.`,
-      context: `Evaluates performance tuning, indexing, and query optimization maturity.`,
-      sampleAnswer: `I analyzed slow query logs, added composite database indexes, and implemented Redis caching for high-read endpoints.`
+      question: `Describe a production performance bottleneck or database latency issue you diagnosed and the exact steps you took to resolve it.`,
+      context: `Evaluates performance tuning, indexing, and query/caching optimization.`,
+      sampleAnswer: `I analyzed APM tracing logs, added composite database indexes, and implemented Redis caching for high-frequency read operations.`
     },
     {
       id: 'q3',
       type: 'behavioral',
-      question: `Tell me about a time when a critical bug occurred right before a launch deadline. How did you prioritize and communicate under pressure?`,
+      question: `Tell me about a time when a critical bug occurred right before a major launch deadline. How did you prioritize and communicate under pressure?`,
       context: `Tests crisis management, communication, and pragmatic engineering trade-offs.`,
-      sampleAnswer: `I isolated the root cause, communicated clear risk options to stakeholders, and delivered a targeted hotfix with added telemetry.`
+      sampleAnswer: `I isolated the root cause, communicated clear risk options to stakeholders, and delivered a targeted hotfix with added monitoring telemetry.`
     },
     {
       id: 'q4',
       type: 'technical',
-      question: `How do you approach writing testable code, and what CI/CD automation checks do you mandate before merging to main?`,
-      context: `Evaluates code quality standards, unit testing, and deployment pipeline confidence.`,
-      sampleAnswer: `I structure code into isolated functional modules, maintain >80% test coverage, and enforce strict linter and integration build checks in CI.`
+      question: `How do you approach writing testable, modular code, and what CI/CD automation checks do you mandate before merging to main?`,
+      context: `Evaluates code quality standards, unit/integration testing, and deployment pipeline confidence.`,
+      sampleAnswer: `I structure code into decoupled functional modules, maintain comprehensive unit test coverage, and enforce linter and build checks in CI.`
     },
     {
       id: 'q5',
       type: 'behavioral',
-      question: `Give an example of a technical disagreement you had with a senior team member or architect. How did you resolve it?`,
-      context: `Assesses collaboration, technical advocacy based on evidence, and team alignment.`,
-      sampleAnswer: `I created a lightweight benchmark prototype, presented empirical data on memory/latency trade-offs, and agreed on a hybrid solution.`
+      question: `Give an example of a technical disagreement you had with a team member or architect regarding implementation strategy. How did you resolve it?`,
+      context: `Assesses collaboration, evidence-based advocacy, and team alignment.`,
+      sampleAnswer: `I created a lightweight benchmark prototype, presented empirical latency metrics, and agreed on a hybrid approach that satisfied both goals.`
     }
   ];
 };
@@ -256,25 +468,56 @@ Respond STRICTLY in JSON format with no markdown wrappers or extra commentary:
 /**
  * Phase 2: Mock Interview Question Generator
  */
-async function generateQuestions(jobDescription, level = 'mid') {
+async function generateQuestions(jobDescription, level = 'mid', roleTitle = 'Software Engineer') {
   const prompt = `
-Generate 5 interview questions for a candidate applying to this role (${level} level).
-Include a mix of technical concepts and behavioral situational questions.
+You are an expert technical interviewer. Generate exactly 5 realistic, targeted interview questions tailored specifically for a candidate applying for the role of "${roleTitle}" (${level} level).
+Ensure all 5 questions directly relate to the target role and key technical requirements specified in the Job Description.
+
+TARGET ROLE: ${roleTitle}
+SENIORITY LEVEL: ${level}
 
 JOB DESCRIPTION:
 """
 ${(jobDescription || '').slice(0, 3000)}
 """
 
-Respond STRICTLY in JSON format:
+Respond STRICTLY in valid JSON format matching this schema:
 {
   "questions": [
     {
       "id": "q1",
-      "type": "technical" | "behavioral",
-      "question": "<The question string>",
-      "context": "<1 line explaining what this evaluates>",
-      "sampleAnswer": "<2 line ideal answer key>"
+      "type": "technical",
+      "question": "Full technical question text tailored to ${roleTitle}",
+      "context": "Short statement of what this evaluates",
+      "sampleAnswer": "Ideal answer key highlights"
+    },
+    {
+      "id": "q2",
+      "type": "technical",
+      "question": "Full technical question text tailored to ${roleTitle}",
+      "context": "Short statement of what this evaluates",
+      "sampleAnswer": "Ideal answer key highlights"
+    },
+    {
+      "id": "q3",
+      "type": "behavioral",
+      "question": "Behavioral question relevant to ${roleTitle}",
+      "context": "Short statement of what this evaluates",
+      "sampleAnswer": "Ideal answer key highlights"
+    },
+    {
+      "id": "q4",
+      "type": "technical",
+      "question": "Technical question on testing or optimization tailored to ${roleTitle}",
+      "context": "Short statement of what this evaluates",
+      "sampleAnswer": "Ideal answer key highlights"
+    },
+    {
+      "id": "q5",
+      "type": "behavioral",
+      "question": "Behavioral question on resolving technical trade-offs in ${roleTitle}",
+      "context": "Short statement of what this evaluates",
+      "sampleAnswer": "Ideal answer key highlights"
     }
   ]
 }
@@ -290,7 +533,7 @@ Respond STRICTLY in JSON format:
           id: q.id || `q${idx + 1}`,
           type: q.type === 'behavioral' ? 'behavioral' : 'technical',
           question: q.question,
-          context: q.context || 'Evaluates key technical requirements for this role.',
+          context: q.context || `Evaluates key requirements for ${roleTitle}.`,
           sampleAnswer: q.sampleAnswer || ''
         }));
       }
@@ -299,8 +542,8 @@ Respond STRICTLY in JSON format:
     }
   }
 
-  // 2. Fallback Engine
-  return fallbackGenerateQuestions(jobDescription, level);
+  // 2. Fallback Engine (Role-Aware)
+  return fallbackGenerateQuestions(jobDescription, level, roleTitle);
 }
 
 /**
