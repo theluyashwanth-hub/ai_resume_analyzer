@@ -17,6 +17,30 @@ const interviewRoutes = require('./routes/interview');
 
 const app = express();
 
+// --- Serverless Database Connection Helper ---
+const DEFAULT_MONGO_URI = 'mongodb+srv://theluyashwanth_db_user:zYgpa7mlV6nLAqkK@cluster0.5b7f8gb.mongodb.net/resumeai?retryWrites=true&w=majority';
+const MONGODB_URI = process.env.MONGODB_URI || DEFAULT_MONGO_URI;
+
+mongoose.set('strictQuery', false);
+mongoose.set('bufferCommands', false);
+
+let dbPromise = null;
+const connectDB = async () => {
+  if (mongoose.connection.readyState === 1) return;
+  try {
+    dns.setServers(['8.8.8.8', '1.1.1.1']);
+  } catch (_e) {}
+  if (!dbPromise) {
+    dbPromise = mongoose.connect(MONGODB_URI, {
+      serverSelectionTimeoutMS: 5000,
+    }).catch((err) => {
+      dbPromise = null;
+      console.warn('⚠️  MongoDB connection warning:', err.message);
+    });
+  }
+  return dbPromise;
+};
+
 // --- Middleware ---
 app.use(cors({
   origin: process.env.CLIENT_URL || true,
@@ -25,13 +49,22 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
+// Ensure DB is connected BEFORE any API routes handle requests
+app.use('/api', async (_req, _res, next) => {
+  try {
+    await connectDB();
+  } catch (_e) {}
+  next();
+});
+
 // --- API Routes ---
 app.use('/api/auth', authRoutes);
 app.use('/api/resume', resumeRoutes);
 app.use('/api/interview', interviewRoutes);
 
 // --- Health check ---
-app.get('/api/health', (_req, res) => {
+app.get('/api/health', async (_req, res) => {
+  await connectDB();
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
@@ -67,36 +100,6 @@ app.use((err, _req, res, _next) => {
   res.status(err.status || 500).json({
     error: err.message || 'An unexpected server error occurred'
   });
-});
-
-// --- Serverless Database Connection Helper ---
-const DEFAULT_MONGO_URI = 'mongodb+srv://theluyashwanth_db_user:zYgpa7mlV6nLAqkK@cluster0.5b7f8gb.mongodb.net/resumeai?retryWrites=true&w=majority';
-const MONGODB_URI = process.env.MONGODB_URI || DEFAULT_MONGO_URI;
-
-mongoose.set('strictQuery', false);
-mongoose.set('bufferCommands', false);
-
-let dbPromise = null;
-const connectDB = async () => {
-  if (mongoose.connection.readyState === 1) return;
-  try {
-    dns.setServers(['8.8.8.8', '1.1.1.1']);
-  } catch (_e) {}
-  if (!dbPromise) {
-    dbPromise = mongoose.connect(MONGODB_URI, {
-      serverSelectionTimeoutMS: 5000,
-    }).catch((err) => {
-      dbPromise = null;
-      console.warn('⚠️  MongoDB connection warning:', err.message);
-    });
-  }
-  return dbPromise;
-};
-
-// Ensure DB is connected for all API requests
-app.use('/api', async (_req, _res, next) => {
-  await connectDB();
-  next();
 });
 
 // --- Server Startup ---
