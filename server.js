@@ -9,6 +9,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 
 const authRoutes = require('./routes/auth');
 const resumeRoutes = require('./routes/resume');
@@ -41,7 +42,11 @@ app.get('/api/health', (_req, res) => {
 });
 
 // --- Serve Static Client Files in Production / Local Build ---
-const clientDistPath = path.join(__dirname, 'client', 'dist');
+const rootDistPath = path.join(__dirname, 'dist');
+const clientDistPath = fs.existsSync(rootDistPath)
+  ? rootDistPath
+  : path.join(__dirname, 'client', 'dist');
+
 app.use(express.static(clientDistPath));
 
 app.get('*', (req, res, next) => {
