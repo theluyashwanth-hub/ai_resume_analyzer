@@ -69,29 +69,45 @@ app.use((err, _req, res, _next) => {
   });
 });
 
-// --- Server Startup with Graceful DB Fallback ---
-const PORT = process.env.PORT || 5000;
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/resumeai';
+// --- Serverless Database Connection Helper ---
+const DEFAULT_MONGO_URI = 'mongodb+srv://theluyashwanth_db_user:zYgpa7mlV6nLAqkK@cluster0.5b7f8gb.mongodb.net/resumeai?retryWrites=true&w=majority';
+const MONGODB_URI = process.env.MONGODB_URI || DEFAULT_MONGO_URI;
 
 mongoose.set('strictQuery', false);
+mongoose.set('bufferCommands', false);
 
-mongoose
-  .connect(MONGODB_URI, {
-    serverSelectionTimeoutMS: 3000, // Timeout fast if local mongo is not running
-  })
-  .then(() => {
-    console.log('✅ Connected to MongoDB successfully.');
-  })
-  .catch((err) => {
-    console.warn('⚠️  MongoDB connection unavailable:', err.message);
-    console.warn('ℹ️  Server will continue in hybrid mode (in-memory analysis & fallback).');
-  })
-  .finally(() => {
-    if (require.main === module) {
-      app.listen(PORT, () => {
-        console.log(`🚀 Server listening on http://localhost:${PORT}`);
-      });
-    }
+let dbPromise = null;
+const connectDB = async () => {
+  if (mongoose.connection.readyState === 1) return;
+  try {
+    dns.setServers(['8.8.8.8', '1.1.1.1']);
+  } catch (_e) {}
+  if (!dbPromise) {
+    dbPromise = mongoose.connect(MONGODB_URI, {
+      serverSelectionTimeoutMS: 5000,
+    }).catch((err) => {
+      dbPromise = null;
+      console.warn('⚠️  MongoDB connection warning:', err.message);
+    });
+  }
+  return dbPromise;
+};
+
+// Ensure DB is connected for all API requests
+app.use('/api', async (_req, _res, next) => {
+  await connectDB();
+  next();
+});
+
+// --- Server Startup ---
+const PORT = process.env.PORT || 5000;
+
+if (require.main === module) {
+  connectDB().then(() => {
+    app.listen(PORT, () => {
+      console.log(`🚀 Server listening on http://localhost:${PORT}`);
+    });
   });
+}
 
 module.exports = app;

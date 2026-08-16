@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const auth = require('../middleware/auth');
 
@@ -12,13 +13,19 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ error: 'Name, email, and password are required.' });
     }
 
-    // Check existing user
-    const existingUser = await User.findOne({ email: email.toLowerCase() });
-    if (existingUser) {
-      return res.status(400).json({ error: 'An account with this email already exists.' });
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({
+        error: 'Database connection unavailable. Please ensure MONGODB_URI is added to your Vercel/Render Environment Variables.'
+      });
     }
 
-    const user = new User({ name, email, password });
+    // Check existing user
+    const existingUser = await User.findOne({ email: email.trim().toLowerCase() });
+    if (existingUser) {
+      return res.status(400).json({ error: 'An account with this email already exists. Please Sign In.' });
+    }
+
+    const user = new User({ name: name.trim(), email: email.trim().toLowerCase(), password });
     await user.save();
 
     const token = user.generateAuthToken();
@@ -43,14 +50,20 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ error: 'Email and password are required.' });
     }
 
-    const user = await User.findOne({ email: email.toLowerCase() });
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({
+        error: 'Database connection unavailable. Please ensure MONGODB_URI is added to your Vercel/Render Environment Variables.'
+      });
+    }
+
+    const user = await User.findOne({ email: email.trim().toLowerCase() });
     if (!user) {
-      return res.status(401).json({ error: 'Invalid email or password.' });
+      return res.status(401).json({ error: 'Account not found. Please switch to "Create Account" to register first.' });
     }
 
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
-      return res.status(401).json({ error: 'Invalid email or password.' });
+      return res.status(401).json({ error: 'Invalid password. Please check your credentials.' });
     }
 
     const token = user.generateAuthToken();
@@ -62,7 +75,7 @@ router.post('/login', async (req, res) => {
     });
   } catch (err) {
     console.error('Login error:', err);
-    res.status(500).json({ error: 'Server error during authentication' });
+    res.status(500).json({ error: err.message || 'Server error during authentication' });
   }
 });
 
