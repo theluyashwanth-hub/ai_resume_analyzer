@@ -82,7 +82,11 @@ mongoose
     console.warn('ℹ️  Server will continue in hybrid mode (in-memory analysis & fallback).');
   })
   .finally(() => {
-    app.listen(PORT, () => {
-      console.log(`🚀 Server listening on http://localhost:${PORT}`);
-    });
+    if (require.main === module) {
+      app.listen(PORT, () => {
+        console.log(`🚀 Server listening on http://localhost:${PORT}`);
+      });
+    }
   });
+
+module.exports = app;
